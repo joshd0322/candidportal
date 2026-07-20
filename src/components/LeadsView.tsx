@@ -2,6 +2,19 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { DealPipelineTimeline } from '@/components/admin/DealPipelineTimeline';
+import { ListColumnPrefsModal } from '@/components/admin/ListColumnPrefsModal';
+import {
+  DEFAULT_LEAD_VISIBLE_COLUMNS,
+  fetchListColumnPrefs,
+  LEAD_COLUMN_IDS,
+  LEAD_COLUMN_LABELS,
+  LEAD_LOCKED_COLUMNS,
+  normalizeListColumnPrefs,
+  resolveVisibleColumns,
+  saveListColumnPrefs,
+  type LeadColumnId,
+  type ListColumnPrefs,
+} from '@/lib/admin-list-column-prefs';
 import {
   CONTRACT_DEAL_STAGE_LABEL,
   CONTRACT_DEAL_STAGE_SHORT,
@@ -642,6 +655,36 @@ export const LeadsView: React.FC<{
   const [closeLead, setCloseLead] = useState<Lead | null>(null);
   const [savingLead, setSavingLead] = useState(false);
   const [analyzingDocId, setAnalyzingDocId] = useState<string | null>(null);
+  const [columnPrefs, setColumnPrefs] = useState<ListColumnPrefs>(() =>
+    normalizeListColumnPrefs('leads', null),
+  );
+  const [columnsOpen, setColumnsOpen] = useState(false);
+
+  const visibleLeadColumns = useMemo(
+    () => resolveVisibleColumns('leads', columnPrefs) as LeadColumnId[],
+    [columnPrefs],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchListColumnPrefs('leads').then((prefs) => {
+      if (!cancelled) setColumnPrefs(prefs);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const persistLeadColumns = async (next: ListColumnPrefs) => {
+    const normalized = normalizeListColumnPrefs('leads', next);
+    setColumnPrefs(normalized);
+    try {
+      const saved = await saveListColumnPrefs('leads', normalized);
+      setColumnPrefs(saved);
+    } catch (err) {
+      console.error('save lead columns', err);
+    }
+  };
   const searchRef = useRef<HTMLDivElement>(null);
 
   // Sync from server/demo seed without wiping unsaved local-only leads mid-save.
@@ -1148,7 +1191,10 @@ export const LeadsView: React.FC<{
 
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', marginBottom: 14 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, marginBottom: 14 }}>
+        <button type="button" className="admin-ticket-btn" onClick={() => setColumnsOpen(true)}>
+          Columns
+        </button>
         <PrimaryBtn
           onClick={() => setLeadModal({ lead: null, isNew: true })}
           disabled={savingLead}
@@ -1234,26 +1280,120 @@ export const LeadsView: React.FC<{
           </div>
         </div>
 
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+        <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 720 }}>
           <thead>
             <tr style={{ background: BRAND.grayLight }}>
-              <Th>Created</Th>
-              <Th>Lead</Th>
-              <Th>Source</Th>
-              <Th>Status</Th>
-              <Th>Decision Maker?</Th>
-              <Th>What can we help with?</Th>
-              <Th center>Actions</Th>
+              {visibleLeadColumns.map((col) => (
+                <Th key={col} center={col === 'actions'}>
+                  {LEAD_COLUMN_LABELS[col]}
+                </Th>
+              ))}
             </tr>
           </thead>
           <tbody>
             {filtered.length === 0 ? (
-              <tr><td colSpan={7} style={{ padding: 40, textAlign: 'center', color: BRAND.gray }}>No leads found.</td></tr>
+              <tr>
+                <td
+                  colSpan={Math.max(visibleLeadColumns.length, 1)}
+                  style={{ padding: 40, textAlign: 'center', color: BRAND.gray }}
+                >
+                  No leads found.
+                </td>
+              </tr>
             ) : (
               filtered.map((l) => {
                 const pc = primaryContact(l);
+                const pl = primaryLocation(l);
                 const isDm = pc?.isDecisionMaker ?? false;
                 const display = resolveLeadDisplayStatus(l, contractSubmitActions);
+                const stage =
+                  findDealActionForLead(l, contractSubmitActions)?.status || l.dealStage;
+                const stageLabel = stage
+                  ? CONTRACT_DEAL_STAGE_LABEL[normalizeContractDealStage(stage)]
+                  : '—';
+
+                const renderLeadCell = (col: LeadColumnId) => {
+                  if (col === 'lead') {
+                    return (
+                      <td key={col} style={{ padding: '13px 16px' }}>
+                        <div style={{ fontWeight: 600, color: BRAND.red, textDecoration: 'underline', textUnderlineOffset: 2 }}>{l.companyFriendly}</div>
+                        <div style={{ fontSize: 11, color: BRAND.gray }}>{pc ? `${pc.name} · ${pc.email}` : 'No contact yet'}</div>
+                      </td>
+                    );
+                  }
+                  if (col === 'status') {
+                    return (
+                      <td key={col} style={{ padding: '13px 16px' }}>
+                        <StatusPill display={display} />
+                      </td>
+                    );
+                  }
+                  if (col === 'actions') {
+                    return (
+                      <td key={col} style={{ padding: '13px 16px' }}>
+                        <div style={{ display: 'flex', gap: 5, justifyContent: 'center' }}>
+                          <ActionBtn onClick={() => setSelectedId(l.id)} title="Open"><EyeIcon /></ActionBtn>
+                          <ActionBtn
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setLeadModal({ lead: l, isNew: false });
+                            }}
+                            title="Edit"
+                          >
+                            <EditIcon />
+                          </ActionBtn>
+                          <ActionBtn
+                            danger
+                            title="Delete"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (confirm(`Delete lead \"${l.companyFriendly}\"?`)) setLeads((p) => p.filter((x) => x.id !== l.id));
+                            }}
+                          >
+                            <TrashIcon />
+                          </ActionBtn>
+                        </div>
+                      </td>
+                    );
+                  }
+
+                  const text = (v?: string | null) => (v?.trim() ? v.trim() : '—');
+                  let content: React.ReactNode = '—';
+                  switch (col) {
+                    case 'created': content = l.createdAt || '—'; break;
+                    case 'source': content = leadSourceLabel(l.source); break;
+                    case 'decisionMaker': content = isDm ? 'Yes' : 'No'; break;
+                    case 'helpWith': content = text(l.helpWith); break;
+                    case 'website': content = text(l.website?.replace(/^https?:\/\//, '')); break;
+                    case 'companyLegal': content = text(l.companyLegal); break;
+                    case 'contactName': content = text(pc?.name); break;
+                    case 'contactEmail': content = text(pc?.email); break;
+                    case 'contactPhone': content = text(pc?.phone); break;
+                    case 'contactRole': content = text(pc?.role); break;
+                    case 'location': content = formatLocation(pl); break;
+                    case 'itSupport': content = text(l.itSupport); break;
+                    case 'currentTechnology': content = text(l.currentTechnology); break;
+                    case 'dealStage': content = stageLabel; break;
+                    case 'lifecycle': content = leadLifecycle(l); break;
+                    case 'closeReason': content = text(l.closeReason); break;
+                    default: content = '—';
+                  }
+                  return (
+                    <td
+                      key={col}
+                      style={{
+                        padding: '13px 16px',
+                        color: col === 'decisionMaker' && isDm ? BRAND.green : BRAND.gray,
+                        fontWeight: col === 'decisionMaker' ? 600 : undefined,
+                        fontSize: 12,
+                      }}
+                    >
+                      {content}
+                    </td>
+                  );
+                };
+
                 return (
                   <tr
                     key={l.id}
@@ -1262,46 +1402,44 @@ export const LeadsView: React.FC<{
                     onMouseOver={(e) => (e.currentTarget.style.background = BRAND.grayLight)}
                     onMouseOut={(e) => (e.currentTarget.style.background = 'transparent')}
                   >
-                    <td style={{ padding: '13px 16px', color: BRAND.gray, fontSize: 12 }}>{l.createdAt}</td>
-                    <td style={{ padding: '13px 16px' }}>
-                      <div style={{ fontWeight: 600, color: BRAND.red, textDecoration: 'underline', textUnderlineOffset: 2 }}>{l.companyFriendly}</div>
-                      <div style={{ fontSize: 11, color: BRAND.gray }}>{pc ? `${pc.name} · ${pc.email}` : 'No contact yet'}</div>
-                    </td>
-                    <td style={{ padding: '13px 16px', fontSize: 12, color: BRAND.gray }}>{leadSourceLabel(l.source)}</td>
-                    <td style={{ padding: '13px 16px' }}><StatusPill display={display} /></td>
-                    <td style={{ padding: '13px 16px', color: isDm ? BRAND.green : BRAND.gray, fontWeight: 600 }}>{isDm ? 'Yes' : 'No'}</td>
-                    <td style={{ padding: '13px 16px', color: BRAND.gray }}>{l.helpWith || '—'}</td>
-                    <td style={{ padding: '13px 16px' }}>
-                      <div style={{ display: 'flex', gap: 5, justifyContent: 'center' }}>
-                        <ActionBtn onClick={() => setSelectedId(l.id)} title="Open"><EyeIcon /></ActionBtn>
-                        <ActionBtn
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setLeadModal({ lead: l, isNew: false });
-                          }}
-                          title="Edit"
-                        >
-                          <EditIcon />
-                        </ActionBtn>
-                        <ActionBtn
-                          danger
-                          title="Delete"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (confirm(`Delete lead \"${l.companyFriendly}\"?`)) setLeads((p) => p.filter((x) => x.id !== l.id));
-                          }}
-                        >
-                          <TrashIcon />
-                        </ActionBtn>
-                      </div>
-                    </td>
+                    {visibleLeadColumns.map((col) => renderLeadCell(col))}
                   </tr>
                 );
               })
             )}
           </tbody>
         </table>
+        </div>
       </div>
+
+      {columnsOpen ? (
+        <ListColumnPrefsModal
+          title="Lead columns"
+          subtitle="Choose which lead fields appear in your leads table."
+          columns={LEAD_COLUMN_IDS.map((id) => ({
+            id,
+            label: LEAD_COLUMN_LABELS[id],
+            locked: LEAD_LOCKED_COLUMNS.includes(id),
+          }))}
+          visibleIds={visibleLeadColumns}
+          onToggle={(id) => {
+            const visible = new Set(columnPrefs.visibleColumns);
+            if (visible.has(id)) visible.delete(id);
+            else visible.add(id);
+            void persistLeadColumns({
+              ...columnPrefs,
+              visibleColumns: [...visible],
+            });
+          }}
+          onRestoreDefaults={() =>
+            void persistLeadColumns({
+              visibleColumns: [...DEFAULT_LEAD_VISIBLE_COLUMNS],
+              columnOrder: [...LEAD_COLUMN_IDS],
+            })
+          }
+          onClose={() => setColumnsOpen(false)}
+        />
+      ) : null}
 
       {leadModal && (
         <LeadFormModal

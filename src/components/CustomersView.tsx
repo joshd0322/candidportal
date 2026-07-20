@@ -73,6 +73,7 @@ import {
   ACCOUNT_LIST_TABS,
   ACCOUNTS_VIEW_BY,
   accountListTabForCustomer,
+  accountStatusLabel,
   customerHasExpiringContracts,
   filterCustomersForAccountTab,
   serviceStartForCustomer,
@@ -96,6 +97,19 @@ import {
   AccountsSupplierVendorView,
   AccountsAgentView,
 } from '@/components/customers/AccountsPartnerViews';
+import { ListColumnPrefsModal } from '@/components/admin/ListColumnPrefsModal';
+import {
+  ACCOUNT_COLUMN_IDS,
+  ACCOUNT_COLUMN_LABELS,
+  ACCOUNT_LOCKED_COLUMNS,
+  DEFAULT_ACCOUNT_VISIBLE_COLUMNS,
+  fetchListColumnPrefs,
+  normalizeListColumnPrefs,
+  resolveVisibleColumns,
+  saveListColumnPrefs,
+  type AccountColumnId,
+  type ListColumnPrefs,
+} from '@/lib/admin-list-column-prefs';
 import { EditContractModal } from '@/components/customers/EditContractModal';
 import { MergeContractsModal } from '@/components/customers/MergeContractsModal';
 import { syncContractAgentAssignment } from '@/lib/bmw/deal-agent-sync';
@@ -689,7 +703,37 @@ export const CustomersView: React.FC<{
   const [customerContracts, setCustomerContracts] = useState<Record<string, CandidContractRecord[]>>(() =>
     buildInitialContracts(INITIAL_CUSTOMERS),
   );
+  const [columnPrefs, setColumnPrefs] = useState<ListColumnPrefs>(() =>
+    normalizeListColumnPrefs('accounts', null),
+  );
+  const [columnsOpen, setColumnsOpen] = useState(false);
   const searchRef = useRef<HTMLDivElement>(null);
+
+  const visibleAccountColumns = useMemo(
+    () => resolveVisibleColumns('accounts', columnPrefs) as AccountColumnId[],
+    [columnPrefs],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchListColumnPrefs('accounts').then((prefs) => {
+      if (!cancelled) setColumnPrefs(prefs);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const persistAccountColumns = async (next: ListColumnPrefs) => {
+    const normalized = normalizeListColumnPrefs('accounts', next);
+    setColumnPrefs(normalized);
+    try {
+      const saved = await saveListColumnPrefs('accounts', normalized);
+      setColumnPrefs(saved);
+    } catch (err) {
+      console.error('save account columns', err);
+    }
+  };
 
   useEffect(() => {
     if (!openAddCustomerFromLead) return;
@@ -1039,6 +1083,11 @@ export const CustomersView: React.FC<{
           ))}
         </div>
         <div className="accounts-toolbar-right">
+          {viewBy === 'customer' ? (
+            <button type="button" className="admin-ticket-btn" onClick={() => setColumnsOpen(true)}>
+              Columns
+            </button>
+          ) : null}
           <ImportExportControls
             variant="dropdown"
             label="Excel export has Accounts, Contacts, Locations, and Deals tabs. Re-upload Accounts/Contacts/Locations to enrich CRM data."
@@ -1129,15 +1178,42 @@ export const CustomersView: React.FC<{
         </div>
 
         {viewBy === 'customer' ? (
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+        <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 720 }}>
           <thead>
             <tr style={{ background: BRAND.grayLight }}>
-              <SortableTh label="Account Name" sortKey="company" current={sortKey} dir={sortDir} onSort={handleSort} />
-              <SortableTh label="Sales Agent" sortKey="agent" current={sortKey} dir={sortDir} onSort={handleSort} />
-              <SortableTh label="Monthly Spend" sortKey="spend" current={sortKey} dir={sortDir} onSort={handleSort} right />
-              <SortableTh label={`Commission (${periodLabel(cyclePeriod)})`} sortKey="commission" current={sortKey} dir={sortDir} onSort={handleSort} right />
-              <SortableTh label="Service Start Date" sortKey="serviceStart" current={sortKey} dir={sortDir} onSort={handleSort} />
-              <Th center>Actions</Th>
+              {visibleAccountColumns.map((col) => {
+                const sortMap: Partial<Record<AccountColumnId, AccountSortKey>> = {
+                  company: 'company',
+                  agent: 'agent',
+                  spend: 'spend',
+                  commission: 'commission',
+                  serviceStart: 'serviceStart',
+                };
+                const mapped = sortMap[col];
+                const label =
+                  col === 'commission'
+                    ? `Commission (${periodLabel(cyclePeriod)})`
+                    : ACCOUNT_COLUMN_LABELS[col];
+                if (mapped) {
+                  return (
+                    <SortableTh
+                      key={col}
+                      label={label}
+                      sortKey={mapped}
+                      current={sortKey}
+                      dir={sortDir}
+                      onSort={handleSort}
+                      right={col === 'spend' || col === 'commission'}
+                    />
+                  );
+                }
+                return (
+                  <Th key={col} center={col === 'actions'}>
+                    {label}
+                  </Th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>
@@ -1145,6 +1221,7 @@ export const CustomersView: React.FC<{
               <CustomerRow
                 key={c.id}
                 customer={c}
+                visibleColumns={visibleAccountColumns}
                 serviceStart={serviceStartForCustomer(c, customerContracts[c.id] ?? []).display}
                 cycleCommission={commissionByAccount[c.id]}
                 archived={activeTab === 'archived'}
@@ -1155,10 +1232,18 @@ export const CustomersView: React.FC<{
               />
             ))}
             {paged.length === 0 && (
-              <tr><td colSpan={6} style={{ padding: 40, textAlign: 'center', color: BRAND.gray }}>No accounts found.</td></tr>
+              <tr>
+                <td
+                  colSpan={Math.max(visibleAccountColumns.length, 1)}
+                  style={{ padding: 40, textAlign: 'center', color: BRAND.gray }}
+                >
+                  No accounts found.
+                </td>
+              </tr>
             )}
           </tbody>
         </table>
+        </div>
         ) : viewBy === 'commission_partner' ? (
           <AccountsCommissionPartnerView
             customers={customers}
@@ -1231,6 +1316,35 @@ export const CustomersView: React.FC<{
           </div>
         </ModalOverlay>
       )}
+
+      {columnsOpen ? (
+        <ListColumnPrefsModal
+          title="Account columns"
+          subtitle="Choose which account fields appear in your customer overview table."
+          columns={ACCOUNT_COLUMN_IDS.map((id) => ({
+            id,
+            label: ACCOUNT_COLUMN_LABELS[id],
+            locked: ACCOUNT_LOCKED_COLUMNS.includes(id),
+          }))}
+          visibleIds={visibleAccountColumns}
+          onToggle={(id) => {
+            const visible = new Set(columnPrefs.visibleColumns);
+            if (visible.has(id)) visible.delete(id);
+            else visible.add(id);
+            void persistAccountColumns({
+              ...columnPrefs,
+              visibleColumns: [...visible],
+            });
+          }}
+          onRestoreDefaults={() =>
+            void persistAccountColumns({
+              visibleColumns: [...DEFAULT_ACCOUNT_VISIBLE_COLUMNS],
+              columnOrder: [...ACCOUNT_COLUMN_IDS],
+            })
+          }
+          onClose={() => setColumnsOpen(false)}
+        />
+      ) : null}
 
       {addCustomerOpen && (
         <AddCustomerModal
@@ -1379,6 +1493,7 @@ const PageBtn: React.FC<{ onClick: () => void; children: React.ReactNode }> = ({
 
 const CustomerRow: React.FC<{
   customer: Customer;
+  visibleColumns: AccountColumnId[];
   serviceStart: string;
   cycleCommission?: number;
   archived?: boolean;
@@ -1386,11 +1501,22 @@ const CustomerRow: React.FC<{
   onViewAsContact?: (contact: Contact, customer: Customer) => void;
   onArchive?: () => void;
   onRestore?: () => void;
-}> = ({ customer: c, serviceStart, cycleCommission, archived = false, onOpen, onViewAsContact, onArchive, onRestore }) => {
+}> = ({
+  customer: c,
+  visibleColumns,
+  serviceStart,
+  cycleCommission,
+  archived = false,
+  onOpen,
+  onViewAsContact,
+  onArchive,
+  onRestore,
+}) => {
   const [hovered, setHovered] = useState(false);
   const [outreachBusy, setOutreachBusy] = useState(false);
   const [outreachMsg, setOutreachMsg] = useState<string | null>(null);
   const pc = primaryContact(c);
+  const pl = primaryLocation(c);
   const urgentActions = c.portal?.actions.filter((a) => a.severity === 'urgent').length ?? 0;
   const soonActions = c.portal?.actions.filter((a) => a.severity === 'soon').length ?? 0;
   const portalPreview = useMemo(() => listAdminPortalPreviewEntries([c])[0] ?? null, [c]);
@@ -1421,80 +1547,162 @@ const CustomerRow: React.FC<{
     }
   };
 
+  const money = (n: number | undefined | null) =>
+    n != null && Number.isFinite(n) && n !== 0
+      ? `$${Number(n).toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+      : '—';
+  const text = (value?: string | null) => (value?.trim() ? value.trim() : '—');
+  const linkCell = (url?: string | null) => {
+    const raw = url?.trim();
+    if (!raw) return '—';
+    const href = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+    return (
+      <a href={href} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} style={{ color: BRAND.red, textDecoration: 'underline', textUnderlineOffset: 2 }}>
+        {raw.replace(/^https?:\/\//i, '')}
+      </a>
+    );
+  };
+  const cellPad: React.CSSProperties = { padding: '13px 16px', color: BRAND.gray, fontSize: 12 };
+  const darkPad: React.CSSProperties = { padding: '13px 16px', color: BRAND.grayDark, fontSize: 13 };
+
+  const renderCell = (col: AccountColumnId) => {
+    if (col === 'company') {
+      return (
+        <td key={col} style={{ padding: '13px 16px' }} onClick={onOpen}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <span style={{ fontWeight: 600, color: archived ? BRAND.gray : BRAND.red, textDecoration: 'underline', textUnderlineOffset: 2 }}>{c.company}</span>
+            {archived && <span style={{ fontSize: 10, fontWeight: 700, color: BRAND.gray, background: BRAND.grayLight, padding: '2px 7px', borderRadius: 20 }}>Archived</span>}
+            {!archived && urgentActions > 0 && (
+              <span style={{ fontSize: 10, fontWeight: 700, color: BRAND.red, background: 'rgba(225,29,72,0.12)', padding: '2px 7px', borderRadius: 20 }}>
+                {urgentActions} renewal{urgentActions === 1 ? '' : 's'}
+              </span>
+            )}
+            {!archived && soonActions > 0 && urgentActions === 0 && (
+              <span style={{ fontSize: 10, fontWeight: 700, color: BRAND.amber, background: 'var(--amber-light)', padding: '2px 7px', borderRadius: 20 }}>
+                {soonActions} upcoming
+              </span>
+            )}
+          </div>
+          <div style={{ fontSize: 11, color: BRAND.gray }}>{pc?.name ?? '—'} · {pc?.email ?? '—'}</div>
+        </td>
+      );
+    }
+    if (col === 'actions') {
+      return (
+        <td key={col} style={{ padding: '13px 16px' }} onClick={(e) => e.stopPropagation()}>
+          <div style={{ display: 'flex', gap: 5, justifyContent: 'center' }}>
+            {archived ? (
+              <>
+                <ActionBtn onClick={onOpen} label="Open record"><EyeIcon /></ActionBtn>
+                <ActionBtn onClick={onRestore} label="Restore account"><AppIcon name="sync" size={13} /></ActionBtn>
+              </>
+            ) : (
+              <>
+                <ActionBtn onClick={onOpen} label="Open record"><EyeIcon /></ActionBtn>
+                <ActionBtn onClick={onOpen} label="Upload file"><UploadIcon /></ActionBtn>
+                <ActionBtn onClick={() => void addToOutreach()} label={outreachMsg ?? (outreachBusy ? 'Adding…' : 'Add to outreach')} disabled={outreachBusy}>
+                  <AppIcon name="broadcast" size={13} />
+                </ActionBtn>
+                <ActionBtn onClick={openPortalView} label="Open customer view" disabled={!portalPreview || !onViewAsContact}>
+                  <AppIcon name="login" size={13} />
+                </ActionBtn>
+                <ActionBtn onClick={() => websiteUrl && window.open(websiteUrl, '_blank', 'noopener,noreferrer')} label="Open website" disabled={!websiteUrl}>
+                  <ExternalLinkIcon />
+                </ActionBtn>
+                <ActionBtn onClick={onArchive} label="Archive account" danger><TrashIcon /></ActionBtn>
+              </>
+            )}
+          </div>
+        </td>
+      );
+    }
+
+    let content: React.ReactNode = '—';
+    switch (col) {
+      case 'agent': content = text(c.agent); break;
+      case 'spend': content = c.spend > 0 ? `$${c.spend.toLocaleString()}/mo` : '—'; break;
+      case 'commission':
+        content = cycleCommission && cycleCommission !== 0
+          ? `$${cycleCommission.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+          : '—';
+        break;
+      case 'serviceStart': content = text(serviceStart); break;
+      case 'status': content = accountStatusLabel(c); break;
+      case 'industry': content = text(c.industry); break;
+      case 'website': content = linkCell(c.website); break;
+      case 'altWebsite': content = linkCell(c.altWebsite); break;
+      case 'linkedinUrl': content = linkCell(c.linkedinUrl); break;
+      case 'companyLegal': content = text(c.companyLegal); break;
+      case 'mainPhone': content = text(c.mainPhone); break;
+      case 'contactName': content = text(pc?.name); break;
+      case 'contactEmail': content = text(pc?.email); break;
+      case 'contactPhone': content = text(pc?.phone); break;
+      case 'contactRole': content = text(pc?.role); break;
+      case 'city': content = text(pl?.city); break;
+      case 'state': content = text(pl?.state); break;
+      case 'location': content = formatLocation(pl); break;
+      case 'locationCount': content = String(c.locations.length); break;
+      case 'foundedYear': content = text(c.foundedYear); break;
+      case 'employeeCount': content = text(c.employeeCount); break;
+      case 'ceoPrincipal': content = text(c.ceoPrincipal); break;
+      case 'annualRevenue': content = text(c.annualRevenue); break;
+      case 'parentCompany': content = text(c.parentCompany); break;
+      case 'fundingOwnershipType': content = text(c.fundingOwnershipType); break;
+      case 'publicLocationCount': content = text(c.publicLocationCount); break;
+      case 'technologies': content = text(c.technologies); break;
+      case 'taxId': content = text(c.taxId); break;
+      case 'mccCode': content = text(c.mccCode); break;
+      case 'corpType': content = text(c.corpType); break;
+      case 'notes': {
+        const n = c.notes?.trim();
+        content = !n ? '—' : n.length > 80 ? `${n.slice(0, 80)}…` : n;
+        break;
+      }
+      case 'savings': content = money(c.savings); break;
+      case 'since': content = text(c.since); break;
+      case 'contractsCount': content = String(c.contracts ?? 0); break;
+      case 'filesCount': content = String(c.files ?? 0); break;
+      case 'portalMrc': content = money(c.portal?.totalCandidMrc); break;
+      case 'portalPreviousMrc': content = money(c.portal?.previousProviderMrc); break;
+      case 'portalSavings': content = money(c.portal?.savingsVsPrevious); break;
+      case 'facebookUrl': content = linkCell(c.facebookUrl); break;
+      case 'instagramUrl': content = linkCell(c.instagramUrl); break;
+      case 'twitterUrl': content = linkCell(c.twitterUrl); break;
+      case 'youtubeUrl': content = linkCell(c.youtubeUrl); break;
+      case 'googleBusinessUrl': content = linkCell(c.googleBusinessUrl); break;
+      default: content = '—';
+    }
+
+    const right = col === 'spend' || col === 'commission' || col === 'savings' || col.startsWith('portal');
+    const mono = right || col === 'contractsCount' || col === 'filesCount' || col === 'locationCount';
+    return (
+      <td
+        key={col}
+        style={{
+          ...(mono ? darkPad : cellPad),
+          textAlign: right ? 'right' : 'left',
+          fontFamily: mono ? 'var(--font-mono)' : undefined,
+          fontWeight: mono ? 600 : undefined,
+          maxWidth: col === 'notes' || col === 'technologies' ? 220 : undefined,
+          whiteSpace: col === 'notes' || col === 'technologies' ? 'nowrap' : undefined,
+          overflow: col === 'notes' || col === 'technologies' ? 'hidden' : undefined,
+          textOverflow: col === 'notes' || col === 'technologies' ? 'ellipsis' : undefined,
+        }}
+        onClick={onOpen}
+        title={typeof content === 'string' && content !== '—' ? content : undefined}
+      >
+        {content}
+      </td>
+    );
+  };
+
   return (
     <tr
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{ borderBottom: `1px solid ${BRAND.grayBorder}`, background: hovered ? BRAND.grayLight : 'transparent', cursor: 'pointer' }}
     >
-      <td style={{ padding: '13px 16px' }} onClick={onOpen}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <span style={{ fontWeight: 600, color: archived ? BRAND.gray : BRAND.red, textDecoration: 'underline', textUnderlineOffset: 2 }}>{c.company}</span>
-          {archived && (
-            <span style={{ fontSize: 10, fontWeight: 700, color: BRAND.gray, background: BRAND.grayLight, padding: '2px 7px', borderRadius: 20 }}>
-              Archived
-            </span>
-          )}
-          {!archived && urgentActions > 0 && (
-            <span style={{ fontSize: 10, fontWeight: 700, color: BRAND.red, background: 'rgba(225,29,72,0.12)', padding: '2px 7px', borderRadius: 20 }}>
-              {urgentActions} renewal{urgentActions === 1 ? '' : 's'}
-            </span>
-          )}
-          {!archived && soonActions > 0 && urgentActions === 0 && (
-            <span style={{ fontSize: 10, fontWeight: 700, color: BRAND.amber, background: 'var(--amber-light)', padding: '2px 7px', borderRadius: 20 }}>
-              {soonActions} upcoming
-            </span>
-          )}
-        </div>
-        <div style={{ fontSize: 11, color: BRAND.gray }}>{pc?.name ?? '—'} · {pc?.email ?? '—'}</div>
-      </td>
-      <td style={{ padding: '13px 16px', color: BRAND.gray }}>{c.agent}</td>
-      <td style={{ padding: '13px 16px', fontFamily: 'var(--font-mono)', fontWeight: 600, color: BRAND.grayDark }}>
-        {c.spend > 0 ? `$${c.spend.toLocaleString()}/mo` : '—'}
-      </td>
-      <td style={{ padding: '13px 16px', textAlign: 'right', fontFamily: 'var(--font-mono)', fontWeight: 600, color: BRAND.grayDark }} onClick={onOpen}>
-        {cycleCommission && cycleCommission !== 0
-          ? `$${cycleCommission.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-          : '—'}
-      </td>
-      <td style={{ padding: '13px 16px', color: BRAND.gray, fontSize: 12 }}>{serviceStart}</td>
-      <td style={{ padding: '13px 16px' }} onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: 'flex', gap: 5, justifyContent: 'center' }}>
-          {archived ? (
-            <>
-              <ActionBtn onClick={onOpen} label="Open record"><EyeIcon /></ActionBtn>
-              <ActionBtn onClick={onRestore} label="Restore account"><AppIcon name="sync" size={13} /></ActionBtn>
-            </>
-          ) : (
-            <>
-              <ActionBtn onClick={onOpen} label="Open record"><EyeIcon /></ActionBtn>
-              <ActionBtn onClick={onOpen} label="Upload file"><UploadIcon /></ActionBtn>
-              <ActionBtn
-                onClick={() => void addToOutreach()}
-                label={outreachMsg ?? (outreachBusy ? 'Adding…' : 'Add to outreach')}
-                disabled={outreachBusy}
-              >
-                <AppIcon name="broadcast" size={13} />
-              </ActionBtn>
-              <ActionBtn
-                onClick={openPortalView}
-                label="Open customer view"
-                disabled={!portalPreview || !onViewAsContact}
-              >
-                <AppIcon name="login" size={13} />
-              </ActionBtn>
-              <ActionBtn
-                onClick={() => websiteUrl && window.open(websiteUrl, '_blank', 'noopener,noreferrer')}
-                label="Open website"
-                disabled={!websiteUrl}
-              >
-                <ExternalLinkIcon />
-              </ActionBtn>
-              <ActionBtn onClick={onArchive} label="Archive account" danger><TrashIcon /></ActionBtn>
-            </>
-          )}
-        </div>
-      </td>
+      {visibleColumns.map((col) => renderCell(col))}
     </tr>
   );
 };
