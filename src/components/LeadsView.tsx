@@ -1,6 +1,8 @@
 'use client';
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { AdminQuoteWorkflowEmbed } from '@/components/admin/AdminQuoteWorkflowEmbed';
+import { startAdminInitiatedQuoteRequest } from '@/lib/services/admin-initiated-quote-client';
 import { DealPipelineTimeline } from '@/components/admin/DealPipelineTimeline';
 import { ListColumnPrefsModal } from '@/components/admin/ListColumnPrefsModal';
 import {
@@ -624,11 +626,17 @@ export const LeadsView: React.FC<{
   onOpenCustomer?: (customerId: string) => void;
   /** Open Action Center analysis review (e.g. after Run analysis on a lead statement). */
   onOpenAnalysisReview?: (reviewId: string) => void;
+  onViewPublishedQuoteAsCustomer?: (
+    quoteRequestId: string,
+    contact?: { name?: string; email?: string },
+  ) => void;
+  analysisReviews?: import('@/lib/bill-parse-types').BillAnalysisReviewRow[];
   /** Select a lead by `id` or `portalLeadRowId` when navigating from elsewhere. */
   focusLeadKey?: string | null;
   onFocusLeadConsumed?: () => void;
   contractSubmitActions?: import('@/lib/services/contract-submit-actions').ContractSubmitActionRow[];
   onContractPipelineUpdated?: () => void;
+  currentUserId?: string;
 }> = ({
   portalLeads = [],
   onRefreshLeads,
@@ -636,10 +644,13 @@ export const LeadsView: React.FC<{
   onConvertLead,
   onOpenCustomer,
   onOpenAnalysisReview,
+  onViewPublishedQuoteAsCustomer,
+  analysisReviews = [],
   focusLeadKey = null,
   onFocusLeadConsumed,
   contractSubmitActions = [],
   onContractPipelineUpdated,
+  currentUserId,
 }) => {
   const mergedSeed = useMemo(() => {
     const dynamicIds = new Set(portalLeads.map((l) => l.id));
@@ -659,6 +670,9 @@ export const LeadsView: React.FC<{
     normalizeListColumnPrefs('leads', null),
   );
   const [columnsOpen, setColumnsOpen] = useState(false);
+  const [quoteWorkflowId, setQuoteWorkflowId] = useState<string | null>(null);
+  const [quoteStartBusy, setQuoteStartBusy] = useState(false);
+  const [quoteStartError, setQuoteStartError] = useState('');
 
   const visibleLeadColumns = useMemo(
     () => resolveVisibleColumns('leads', columnPrefs) as LeadColumnId[],
@@ -913,6 +927,57 @@ export const LeadsView: React.FC<{
     }
   };
 
+  const openQuoteWorkflow = (quoteRequestId: string) => {
+    setQuoteWorkflowId(quoteRequestId);
+  };
+
+  const startLeadQuote = (lead: Lead) => {
+    if (quoteStartBusy) return;
+    setQuoteStartError('');
+    setQuoteStartBusy(true);
+    void startAdminInitiatedQuoteRequest({
+      source: 'lead',
+      portalLeadRowId: lead.portalLeadRowId,
+      leadId: lead.id,
+      leadSnapshot: lead,
+    })
+      .then(({ quoteRequestId }) => {
+        setQuoteWorkflowId(quoteRequestId);
+        const next: Lead = { ...lead, quoteRequestId };
+        setLeads((prev) => prev.map((l) => (l.id === lead.id ? next : l)));
+        void onRefreshLeads?.();
+      })
+      .catch((err) => {
+        setQuoteStartError(err instanceof Error ? err.message : 'Could not start quote');
+      })
+      .finally(() => setQuoteStartBusy(false));
+  };
+
+  if (quoteWorkflowId) {
+    const workflowLead =
+      selected?.quoteRequestId === quoteWorkflowId
+        ? selected
+        : leads.find((l) => l.quoteRequestId === quoteWorkflowId) ?? selected;
+    return (
+      <AdminQuoteWorkflowEmbed
+        quoteRequestId={quoteWorkflowId}
+        onClose={() => setQuoteWorkflowId(null)}
+        breadcrumb={
+          workflowLead
+            ? `Leads / ${workflowLead.companyFriendly} / Quote`
+            : 'Leads / Quote'
+        }
+        currentUserId={currentUserId}
+        linkedLead={workflowLead}
+        onConvertLead={onConvertLead}
+        onOpenLeads={() => setQuoteWorkflowId(null)}
+        onRefreshLeads={onRefreshLeads}
+        onUpdated={() => void onRefreshLeads?.()}
+        onViewPublishedQuoteAsCustomer={onViewPublishedQuoteAsCustomer}
+      />
+    );
+  }
+
   if (selected) {
     const pc = primaryContact(selected);
     const pl = primaryLocation(selected);
@@ -945,15 +1010,24 @@ export const LeadsView: React.FC<{
               </div>
             </div>
             <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-              {selected.quoteRequestId && onOpenQuoteRequest && (
+              {selected.quoteRequestId ? (
                 <button
                   type="button"
-                  onClick={() => onOpenQuoteRequest(selected.quoteRequestId!)}
+                  onClick={() => openQuoteWorkflow(selected.quoteRequestId!)}
                   style={{ background: 'rgba(255,255,255,0.12)', color: BRAND.onAccent, border: '1px solid rgba(255,255,255,0.16)', borderRadius: 6, padding: '9px 16px', fontFamily: "'DM Sans', sans-serif", fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
                 >
-                  View quote request
+                  Continue quote
                 </button>
-              )}
+              ) : leadLifecycle(selected) === 'open' ? (
+                <button
+                  type="button"
+                  disabled={quoteStartBusy}
+                  onClick={() => startLeadQuote(selected)}
+                  style={{ background: BRAND.red, color: BRAND.onAccent, border: 'none', borderRadius: 6, padding: '9px 16px', fontFamily: "'DM Sans', sans-serif", fontSize: 12, fontWeight: 600, cursor: quoteStartBusy ? 'wait' : 'pointer' }}
+                >
+                  {quoteStartBusy ? 'Starting…' : '+ Quote'}
+                </button>
+              ) : null}
               {leadLifecycle(selected) === 'open' && onConvertLead && (
                 <button
                   type="button"
@@ -989,6 +1063,9 @@ export const LeadsView: React.FC<{
               </button>
             </div>
           </div>
+          {quoteStartError ? (
+            <div style={{ marginTop: 10, fontSize: 12, color: BRAND.redLight }}>{quoteStartError}</div>
+          ) : null}
           <div style={{ marginTop: 14, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <StatusPill display={resolveLeadDisplayStatus(selected, contractSubmitActions)} />
             {selected.source ? (
@@ -1085,6 +1162,12 @@ export const LeadsView: React.FC<{
                   const isStatement =
                     doc.recordKind === 'statement_for_analysis' || doc.recordKind === 'statement';
                   const analysisId = doc.analysisReviewId || selected.analysisReviewId;
+                  const analysisReview = analysisId
+                    ? analysisReviews.find((r) => r.id === analysisId)
+                    : null;
+                  const analysisPublished = Boolean(
+                    analysisReview?.status === 'published' && analysisReview.published_snapshot,
+                  );
                   const analyzing = analyzingDocId === doc.id;
                   return (
                     <div
@@ -1157,9 +1240,11 @@ export const LeadsView: React.FC<{
                         >
                           {analyzing
                             ? 'Analyzing…'
-                            : analysisId
-                              ? 'Open analysis'
-                              : 'Run analysis'}
+                            : analysisPublished
+                              ? 'View as customer'
+                              : analysisId
+                                ? 'Open analysis'
+                                : 'Run analysis'}
                         </button>
                       ) : null}
                     </div>

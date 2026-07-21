@@ -10,6 +10,8 @@ export type ListColumnPrefs = {
 
 export const ACCOUNT_COLUMN_IDS = [
   'company',
+  'baseService',
+  'serviceDetail',
   'agent',
   'spend',
   'commission',
@@ -60,6 +62,8 @@ export type AccountColumnId = (typeof ACCOUNT_COLUMN_IDS)[number];
 
 export const ACCOUNT_COLUMN_LABELS: Record<AccountColumnId, string> = {
   company: 'Account Name',
+  baseService: 'Base service',
+  serviceDetail: 'Service detail',
   agent: 'Sales Agent',
   spend: 'Monthly Spend',
   commission: 'Commission',
@@ -108,10 +112,11 @@ export const ACCOUNT_COLUMN_LABELS: Record<AccountColumnId, string> = {
 
 export const DEFAULT_ACCOUNT_VISIBLE_COLUMNS: AccountColumnId[] = [
   'company',
+  'baseService',
+  'serviceDetail',
   'agent',
-  'spend',
+  'contactName',
   'commission',
-  'serviceStart',
   'actions',
 ];
 
