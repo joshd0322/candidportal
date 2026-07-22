@@ -4897,6 +4897,25 @@ body > * {
   gap: 8px;
   margin-top: 12px;
 }
+.crm-outreach-add-popover-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--gray);
+}
+.crm-outreach-add-popover-field .outreach-select {
+  font-weight: 500;
+}
+.crm-outreach-add-popover-hint {
+  margin: 8px 0 0;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--gray);
+  font-weight: 500;
+}
 .crm-outreach-add-popover .outreach-tag-input {
   margin: 0;
 }

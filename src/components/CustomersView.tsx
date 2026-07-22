@@ -80,6 +80,7 @@ import {
   customerMatchesDealServiceFilters,
   baseServicesForCustomer,
   distinctBaseServiceOptions,
+  serviceStartForCustomer,
   sortCustomers,
   type AccountListTab,
   type AccountSortKey,
@@ -124,6 +125,7 @@ import { syncContractAgentAssignment } from '@/lib/bmw/deal-agent-sync';
 import type { Lead } from '@/components/LeadsView';
 import { findMatchingLeads } from '@/lib/services/portal-leads';
 import { AddCustomerReminderModal } from '@/components/customers/AddCustomerReminderModal';
+import { postTeamNote } from '@/lib/team-notes';
 import { EditDocumentModal } from '@/components/customers/EditDocumentModal';
 import { ResolveCustomerActionModal, type ResolveActionSubmit } from '@/components/customers/ResolveCustomerActionModal';
 import { AddCustomActionModal, type CustomActionDraft } from '@/components/customers/AddCustomActionModal';
@@ -142,7 +144,7 @@ import {
   reviewRequestToCustomerAction,
   type MemberReviewRequestRow,
 } from '@/lib/services/member-review-requests';
-import type { CustomerReminderKind } from '@/lib/customer-reminders/types';
+import type { CustomerReminder, CustomerReminderKind } from '@/lib/customer-reminders/types';
 import { PortalAccessFields } from '@/components/customers/PortalAccessFields';
 import {
   grantFromContact,
@@ -721,6 +723,11 @@ export const CustomersView: React.FC<{
   const [addCustomerLeadPrefill, setAddCustomerLeadPrefill] = useState<Lead | null>(null);
   const [archiveConfirmCustomer, setArchiveConfirmCustomer] = useState<Customer | null>(null);
   const [archiveBusy, setArchiveBusy] = useState(false);
+  const [quickNoteCustomer, setQuickNoteCustomer] = useState<Customer | null>(null);
+  const [quickNoteBody, setQuickNoteBody] = useState('');
+  const [quickNoteBusy, setQuickNoteBusy] = useState(false);
+  const [quickNoteError, setQuickNoteError] = useState('');
+  const [quickTaskCustomer, setQuickTaskCustomer] = useState<Customer | null>(null);
   const [customerDocuments, setCustomerDocuments] = useState<Record<string, CustomerDocument[]>>({});
   const [customerContracts, setCustomerContracts] = useState<Record<string, CandidContractRecord[]>>(() =>
     buildInitialContracts(INITIAL_CUSTOMERS),
@@ -1283,6 +1290,12 @@ export const CustomersView: React.FC<{
                 onViewAsContact={onViewAsContact}
                 onArchive={() => setArchiveConfirmCustomer(c)}
                 onRestore={() => void handleRestoreCustomer(c)}
+                onAddNote={() => {
+                  setQuickNoteError('');
+                  setQuickNoteBody('');
+                  setQuickNoteCustomer(c);
+                }}
+                onAddTask={() => setQuickTaskCustomer(c)}
               />
             ))}
             {paged.length === 0 && (
@@ -1372,6 +1385,99 @@ export const CustomersView: React.FC<{
             </div>
           </div>
         </ModalOverlay>
+      )}
+
+      {quickNoteCustomer && (
+        <ModalOverlay
+          onClose={() => {
+            if (quickNoteBusy) return;
+            setQuickNoteCustomer(null);
+            setQuickNoteBody('');
+            setQuickNoteError('');
+          }}
+        >
+          <ModalHeader
+            icon={<AppIcon name="messages" size={16} />}
+            title="Add team note"
+            subtitle={quickNoteCustomer.company}
+            onClose={() => {
+              if (quickNoteBusy) return;
+              setQuickNoteCustomer(null);
+              setQuickNoteBody('');
+              setQuickNoteError('');
+            }}
+          />
+          <div style={{ padding: '0 24px 24px' }}>
+            <textarea
+              className="form-textarea"
+              value={quickNoteBody}
+              onChange={(e) => setQuickNoteBody(e.target.value)}
+              rows={5}
+              placeholder="Write a note for the team… Use @name to mention someone"
+              disabled={quickNoteBusy}
+              style={{
+                width: '100%',
+                boxSizing: 'border-box',
+                marginTop: 4,
+                padding: 12,
+                border: `1px solid ${BRAND.grayBorder}`,
+                borderRadius: 8,
+                fontFamily: "'DM Sans', sans-serif",
+                fontSize: 13,
+                resize: 'vertical',
+                minHeight: 120,
+              }}
+            />
+            {quickNoteError ? (
+              <p style={{ color: BRAND.red, fontSize: 12, margin: '8px 0 0' }}>{quickNoteError}</p>
+            ) : null}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 16 }}>
+              <SecondaryBtn
+                light
+                onClick={() => {
+                  if (quickNoteBusy) return;
+                  setQuickNoteCustomer(null);
+                  setQuickNoteBody('');
+                  setQuickNoteError('');
+                }}
+              >
+                Cancel
+              </SecondaryBtn>
+              <PrimaryBtn
+                onClick={() => {
+                  if (quickNoteBusy || !quickNoteBody.trim()) return;
+                  setQuickNoteBusy(true);
+                  setQuickNoteError('');
+                  void postTeamNote({
+                    contextType: 'customer',
+                    contextKey: quickNoteCustomer.id,
+                    body: quickNoteBody.trim(),
+                  })
+                    .then(() => {
+                      setQuickNoteCustomer(null);
+                      setQuickNoteBody('');
+                    })
+                    .catch((err) => {
+                      setQuickNoteError(err instanceof Error ? err.message : 'Failed to save note');
+                    })
+                    .finally(() => setQuickNoteBusy(false));
+                }}
+              >
+                {quickNoteBusy ? 'Saving…' : 'Save note'}
+              </PrimaryBtn>
+            </div>
+          </div>
+        </ModalOverlay>
+      )}
+
+      {quickTaskCustomer && (
+        <AddCustomerReminderModal
+          key={`list-task-${quickTaskCustomer.id}`}
+          customer={quickTaskCustomer}
+          defaultKind="task"
+          onClose={() => setQuickTaskCustomer(null)}
+          onSaved={() => setQuickTaskCustomer(null)}
+        />
       )}
 
       {columnsOpen ? (
@@ -1559,6 +1665,8 @@ const CustomerRow: React.FC<{
   onViewAsContact?: (contact: Contact, customer: Customer) => void;
   onArchive?: () => void;
   onRestore?: () => void;
+  onAddNote?: () => void;
+  onAddTask?: () => void;
 }> = ({
   customer: c,
   visibleColumns,
@@ -1570,6 +1678,8 @@ const CustomerRow: React.FC<{
   onViewAsContact,
   onArchive,
   onRestore,
+  onAddNote,
+  onAddTask,
 }) => {
   const [hovered, setHovered] = useState(false);
   const [outreachBusy, setOutreachBusy] = useState(false);
@@ -1655,6 +1765,12 @@ const CustomerRow: React.FC<{
               <>
                 <ActionBtn onClick={onOpen} label="Open record"><EyeIcon /></ActionBtn>
                 <ActionBtn onClick={onOpen} label="Upload file"><UploadIcon /></ActionBtn>
+                <ActionBtn onClick={onAddNote} label="Add note">
+                  <AppIcon name="messages" size={13} />
+                </ActionBtn>
+                <ActionBtn onClick={onAddTask} label="Add task">
+                  <AppIcon name="reports" size={13} />
+                </ActionBtn>
                 <span ref={outreachAnchorRef} style={{ display: 'inline-flex' }}>
                   <ActionBtn
                     onClick={addToOutreach}
@@ -3578,11 +3694,23 @@ const CustomerRecordWithModals: React.FC<{
   const [reminderModalOpen, setReminderModalOpen] = useState(false);
   const [reminderModalKind, setReminderModalKind] = useState<CustomerReminderKind>('task');
   const [reminderModalContract, setReminderModalContract] = useState<CandidContractRecord | undefined>();
+  const [reminderModalInitial, setReminderModalInitial] = useState<CustomerReminder | null>(null);
   const [remindersRefresh, setRemindersRefresh] = useState(0);
 
   const openReminderModal = (kind: CustomerReminderKind, contract?: CandidContractRecord) => {
+    setReminderModalInitial(null);
     setReminderModalKind(kind);
     setReminderModalContract(contract);
+    setReminderModalOpen(true);
+  };
+
+  const openEditReminderModal = (reminder: CustomerReminder) => {
+    setReminderModalInitial(reminder);
+    setReminderModalKind(reminder.kind);
+    const linked = reminder.dealExternalId
+      ? props.contracts.find((c) => c.id === reminder.dealExternalId)
+      : undefined;
+    setReminderModalContract(linked);
     setReminderModalOpen(true);
   };
 
@@ -3750,6 +3878,7 @@ const CustomerRecordWithModals: React.FC<{
         onOpenRecommendationsHub={() => setAiRecHubOpen(true)}
         onContractPipelineUpdated={props.onContractPipelineUpdated}
         onAddReminder={openReminderModal}
+        onEditReminder={openEditReminderModal}
         remindersRefresh={remindersRefresh}
         analysisReviews={props.analysisReviews}
         onOpenAnalysisReview={props.onOpenAnalysisReview}
@@ -3994,13 +4123,19 @@ const CustomerRecordWithModals: React.FC<{
       ) : null}
       {reminderModalOpen && (
         <AddCustomerReminderModal
+          key={reminderModalInitial?.id ?? `new-${reminderModalKind}`}
           customer={props.customer}
           contract={reminderModalContract}
           defaultKind={reminderModalKind}
-          onClose={() => setReminderModalOpen(false)}
+          initial={reminderModalInitial}
+          onClose={() => {
+            setReminderModalOpen(false);
+            setReminderModalInitial(null);
+          }}
           onSaved={() => {
             setRemindersRefresh((n) => n + 1);
             setReminderModalOpen(false);
+            setReminderModalInitial(null);
           }}
         />
       )}

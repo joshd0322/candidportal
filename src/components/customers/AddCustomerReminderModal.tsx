@@ -4,7 +4,12 @@ import React, { useMemo, useState } from 'react';
 import type { CandidContractRecord } from '@/lib/customer-records';
 import { contractServiceTitle } from '@/lib/customer-contracts-from-deals';
 import type { Contact, Customer } from '@/components/CustomersView';
-import type { CreateCustomerReminderInput, CustomerReminderKind } from '@/lib/customer-reminders/types';
+import type {
+  CreateCustomerReminderInput,
+  CustomerReminder,
+  CustomerReminderKind,
+  UpdateCustomerReminderInput,
+} from '@/lib/customer-reminders/types';
 import { REMINDER_KIND_LABELS } from '@/lib/customer-reminders/types';
 
 function primaryContact(contacts: Contact[]): Contact | undefined {
@@ -30,6 +35,8 @@ export type AddCustomerReminderModalProps = {
   customer: Customer;
   contract?: CandidContractRecord;
   defaultKind?: CustomerReminderKind;
+  /** When set, modal edits this existing task/reminder instead of creating. */
+  initial?: CustomerReminder | null;
   onClose: () => void;
   onSaved: () => void;
 };
@@ -38,26 +45,33 @@ export function AddCustomerReminderModal({
   customer,
   contract,
   defaultKind = 'task',
+  initial = null,
   onClose,
   onSaved,
 }: AddCustomerReminderModalProps) {
+  const isEdit = Boolean(initial?.id);
   const contactsWithEmail = useMemo(
     () => customer.contacts.filter((c) => c.email?.trim()),
     [customer.contacts],
   );
   const defaultContact = primaryContact(contactsWithEmail);
 
-  const [kind, setKind] = useState<CustomerReminderKind>(defaultKind);
+  const [kind, setKind] = useState<CustomerReminderKind>(initial?.kind ?? defaultKind);
   const [title, setTitle] = useState(
-    contract ? `Follow up: ${contractServiceTitle(contract)}` : '',
+    initial?.title ?? (contract ? `Follow up: ${contractServiceTitle(contract)}` : ''),
   );
-  const [body, setBody] = useState('');
-  const [dueAt, setDueAt] = useState('');
-  const [calendarStart, setCalendarStart] = useState('');
-  const [calendarEnd, setCalendarEnd] = useState('');
-  const [contactEmail, setContactEmail] = useState(defaultContact?.email ?? '');
-  const [notifyPortal, setNotifyPortal] = useState(Boolean(defaultContact?.portalAccess));
-  const [notifyEmail, setNotifyEmail] = useState(true);
+  const [body, setBody] = useState(initial?.body ?? '');
+  const [dueAt, setDueAt] = useState(toDatetimeLocalValue(initial?.dueAt));
+  const [calendarStart, setCalendarStart] = useState(toDatetimeLocalValue(initial?.calendarStartAt));
+  const [calendarEnd, setCalendarEnd] = useState(toDatetimeLocalValue(initial?.calendarEndAt));
+  const [contactEmail, setContactEmail] = useState(
+    initial?.contactEmail ?? defaultContact?.email ?? '',
+  );
+  const [notifyPortal, setNotifyPortal] = useState(
+    initial ? initial.notifyPortal : Boolean(defaultContact?.portalAccess),
+  );
+  const [notifyEmail, setNotifyEmail] = useState(initial ? initial.notifyEmail : true);
+  const [status, setStatus] = useState(initial?.status ?? 'open');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -77,28 +91,52 @@ export function AddCustomerReminderModal({
     setSaving(true);
     setError('');
     try {
-      const payload: CreateCustomerReminderInput = {
-        customerExternalId: customer.id,
-        dealExternalId: contract?.id,
-        kind,
-        title: title.trim(),
-        body: body.trim() || undefined,
-        dueAt: kind === 'calendar' ? undefined : fromDatetimeLocalValue(dueAt),
-        calendarStartAt: kind === 'calendar' ? fromDatetimeLocalValue(calendarStart) : undefined,
-        calendarEndAt: kind === 'calendar' ? fromDatetimeLocalValue(calendarEnd) : undefined,
-        notifyPortal: notifyPortal && canNotifyPortal,
-        notifyEmail,
-        contactEmail: contactEmail.trim() || undefined,
-      };
+      if (isEdit && initial) {
+        const patch: UpdateCustomerReminderInput = {
+          kind,
+          title: title.trim(),
+          body: body.trim() || null,
+          dueAt: kind === 'calendar' ? null : fromDatetimeLocalValue(dueAt) ?? null,
+          calendarStartAt: kind === 'calendar' ? fromDatetimeLocalValue(calendarStart) ?? null : null,
+          calendarEndAt: kind === 'calendar' ? fromDatetimeLocalValue(calendarEnd) ?? null : null,
+          notifyPortal: notifyPortal && canNotifyPortal,
+          notifyEmail,
+          contactEmail: contactEmail.trim() || null,
+          status,
+        };
+        const res = await fetch(`/api/admin/crm/reminders/${encodeURIComponent(initial.id)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(patch),
+        });
+        if (!res.ok) {
+          const data = (await res.json()) as { error?: string };
+          throw new Error(data.error ?? 'Save failed');
+        }
+      } else {
+        const payload: CreateCustomerReminderInput = {
+          customerExternalId: customer.id,
+          dealExternalId: contract?.id,
+          kind,
+          title: title.trim(),
+          body: body.trim() || undefined,
+          dueAt: kind === 'calendar' ? undefined : fromDatetimeLocalValue(dueAt),
+          calendarStartAt: kind === 'calendar' ? fromDatetimeLocalValue(calendarStart) : undefined,
+          calendarEndAt: kind === 'calendar' ? fromDatetimeLocalValue(calendarEnd) : undefined,
+          notifyPortal: notifyPortal && canNotifyPortal,
+          notifyEmail,
+          contactEmail: contactEmail.trim() || undefined,
+        };
 
-      const res = await fetch('/api/admin/crm/reminders', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      if (!res.ok) {
-        const data = (await res.json()) as { error?: string };
-        throw new Error(data.error ?? 'Save failed');
+        const res = await fetch('/api/admin/crm/reminders', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+          const data = (await res.json()) as { error?: string };
+          throw new Error(data.error ?? 'Save failed');
+        }
       }
       onSaved();
       onClose();
@@ -124,11 +162,14 @@ export function AddCustomerReminderModal({
         <div className="modal-header">
           <div>
             <div className="modal-title" id="crm-reminder-modal-title">
-              Add {REMINDER_KIND_LABELS[kind].toLowerCase()}
+              {isEdit ? 'Edit' : 'Add'} {REMINDER_KIND_LABELS[kind].toLowerCase()}
             </div>
             <div className="modal-subtitle">
               {customer.company}
               {contract ? ` · ${contractServiceTitle(contract)}` : ''}
+              {isEdit && initial?.dealExternalId && !contract
+                ? ` · Linked deal`
+                : ''}
             </div>
           </div>
           <button type="button" className="modal-close" onClick={onClose} aria-label="Close">
@@ -204,6 +245,21 @@ export function AddCustomerReminderModal({
             </label>
           )}
 
+          {isEdit ? (
+            <label className="form-group">
+              <span className="form-label">Status</span>
+              <select
+                className="form-input"
+                value={status}
+                onChange={(e) => setStatus(e.target.value as CustomerReminder['status'])}
+              >
+                <option value="open">Open</option>
+                <option value="completed">Completed</option>
+                <option value="cancelled">Cancelled</option>
+              </select>
+            </label>
+          ) : null}
+
           <div className="crm-reminder-notify-panel">
             <div className="crm-reminder-notify-title">Customer notifications</div>
             {contactsWithEmail.length > 0 ? (
@@ -273,7 +329,11 @@ export function AddCustomerReminderModal({
             Cancel
           </button>
           <button type="button" className="btn-primary" disabled={saving} onClick={() => void submit()}>
-            {saving ? 'Saving…' : `Save ${REMINDER_KIND_LABELS[kind].toLowerCase()}`}
+            {saving
+              ? 'Saving…'
+              : isEdit
+                ? 'Save changes'
+                : `Save ${REMINDER_KIND_LABELS[kind].toLowerCase()}`}
           </button>
         </div>
       </div>

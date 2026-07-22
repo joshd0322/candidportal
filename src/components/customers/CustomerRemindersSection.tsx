@@ -22,6 +22,7 @@ export function CustomerRemindersSection({
   contracts,
   refreshToken = 0,
   onAdd,
+  onEdit,
   scrollSection: ScrollSection,
   emptyRow: EmptyRow,
 }: {
@@ -29,6 +30,7 @@ export function CustomerRemindersSection({
   contracts: CandidContractRecord[];
   refreshToken?: number;
   onAdd: (kind: CustomerReminderKind, contract?: CandidContractRecord) => void;
+  onEdit?: (reminder: CustomerReminder) => void;
   scrollSection: React.ComponentType<{
     title: string;
     subtitle?: string;
@@ -152,6 +154,11 @@ export function CustomerRemindersSection({
                           Download .ics
                         </button>
                       </>
+                    ) : null}
+                    {onEdit && r.status !== 'cancelled' ? (
+                      <button type="button" className="crm-reminder-btn" onClick={() => onEdit(r)}>
+                        Edit
+                      </button>
                     ) : null}
                     {r.status === 'open' ? (
                       <button type="button" className="crm-reminder-btn" onClick={() => void markComplete(r.id)}>

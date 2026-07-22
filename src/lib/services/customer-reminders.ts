@@ -157,3 +157,74 @@ export async function updateCustomerReminderStatus(
   const { error } = await admin.from('customer_reminders').update({ status }).eq('id', reminderId);
   if (error) throw new Error(error.message);
 }
+
+export async function updateCustomerReminder(
+  reminderId: string,
+  input: import('@/lib/customer-reminders/types').UpdateCustomerReminderInput,
+  customerExternalId?: string,
+): Promise<CustomerReminder> {
+  const admin = createSupabaseAdminClient();
+  const { data: existing, error: loadErr } = await admin
+    .from('customer_reminders')
+    .select('*')
+    .eq('id', reminderId)
+    .maybeSingle();
+  if (loadErr) throw new Error(loadErr.message);
+  if (!existing) throw new Error('Reminder not found');
+
+  const row = existing as CustomerReminderRow;
+  const kind = input.kind ?? row.kind;
+  const patch: Record<string, unknown> = {};
+
+  if (input.kind !== undefined) patch.kind = input.kind;
+  if (input.title !== undefined) {
+    const title = input.title.trim();
+    if (!title) throw new Error('Title is required');
+    patch.title = title;
+  }
+  if (input.body !== undefined) patch.body = input.body?.trim() || null;
+  if (input.dealExternalId !== undefined) patch.deal_external_id = input.dealExternalId || null;
+  if (input.notifyPortal !== undefined) patch.notify_portal = Boolean(input.notifyPortal);
+  if (input.notifyEmail !== undefined) patch.notify_email = Boolean(input.notifyEmail);
+  if (input.contactEmail !== undefined) patch.contact_email = input.contactEmail?.trim() || null;
+  if (input.status !== undefined) patch.status = input.status;
+
+  if (kind === 'calendar') {
+    patch.due_at = null;
+    if (input.calendarStartAt !== undefined) patch.calendar_start_at = input.calendarStartAt || null;
+    if (input.calendarEndAt !== undefined) patch.calendar_end_at = input.calendarEndAt || null;
+    if (input.kind === 'calendar' && input.calendarStartAt === undefined && !row.calendar_start_at) {
+      // keep existing start if not provided
+    }
+  } else {
+    if (input.dueAt !== undefined) patch.due_at = input.dueAt || null;
+    if (input.kind !== undefined && input.kind !== 'calendar') {
+      patch.calendar_start_at = null;
+      patch.calendar_end_at = null;
+    }
+  }
+
+  let externalId = customerExternalId;
+  if (!externalId) {
+    const { data: customer } = await admin
+      .from('customers')
+      .select('external_id')
+      .eq('id', row.customer_id)
+      .maybeSingle();
+    externalId = customer?.external_id ? String(customer.external_id) : row.customer_id;
+  }
+
+  if (!Object.keys(patch).length) {
+    return mapReminderRow(row, externalId);
+  }
+
+  const { data, error } = await admin
+    .from('customer_reminders')
+    .update(patch)
+    .eq('id', reminderId)
+    .select('*')
+    .single();
+  if (error) throw new Error(error.message);
+
+  return mapReminderRow(data as CustomerReminderRow, externalId);
+}

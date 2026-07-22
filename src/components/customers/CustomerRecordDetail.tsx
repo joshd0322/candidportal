@@ -38,14 +38,14 @@ import {
 import { CustomerRemindersSection } from '@/components/customers/CustomerRemindersSection';
 import { CustomerAnalysisSection } from '@/components/customers/CustomerAnalysisSection';
 import { TeamNotesPanel } from '@/components/admin/TeamNotesPanel';
+import { AddToOutreachTagPopover } from '@/components/customers/AddToOutreachTagPopover';
 import { CustomerEmailPanel } from '@/components/customers/CustomerEmailPanel';
 import { CustomerCommunicationsPanel } from '@/components/customers/CustomerCommunicationsPanel';
 import { AppIcon } from '@/components/AppIcon';
-import { addOutreachAccounts } from '@/lib/outreach';
 import { BRAND } from '@/lib/ui/brand-tokens';
 import type { BillAnalysisReviewRow } from '@/lib/bill-parse-types';
 import { analysisReviewsForCustomer } from '@/lib/crm/customer-lookup';
-import type { CustomerReminderKind } from '@/lib/customer-reminders/types';
+import type { CustomerReminder, CustomerReminderKind } from '@/lib/customer-reminders/types';
 
 function formatDocAmount(amount?: number | null): string {
   if (amount == null || !Number.isFinite(amount)) return '—';
@@ -186,6 +186,7 @@ export type CustomerRecordDetailProps = {
   onOpenRecommendationsHub?: () => void;
   onContractPipelineUpdated?: () => void;
   onAddReminder: (kind: CustomerReminderKind, contract?: CandidContractRecord) => void;
+  onEditReminder?: (reminder: CustomerReminder) => void;
   remindersRefresh: number;
   analysisReviews?: BillAnalysisReviewRow[];
   onOpenAnalysisReview?: (reviewId: string) => void;
@@ -230,6 +231,7 @@ export function CustomerRecordDetail({
   onOpenRecommendationsHub,
   onContractPipelineUpdated,
   onAddReminder,
+  onEditReminder,
   remindersRefresh,
   analysisReviews = [],
   onOpenAnalysisReview,
@@ -256,6 +258,8 @@ export function CustomerRecordDetail({
   const [pendingAddRecord, setPendingAddRecord] = useState(false);
   const [outreachBusy, setOutreachBusy] = useState(false);
   const [outreachMsg, setOutreachMsg] = useState<string | null>(null);
+  const [outreachPopoverOpen, setOutreachPopoverOpen] = useState(false);
+  const outreachAnchorRef = useRef<HTMLSpanElement>(null);
   const [locationSearch, setLocationSearch] = useState('');
   const [contactSearch, setContactSearch] = useState('');
   const [docSearch, setDocSearch] = useState('');
@@ -798,30 +802,33 @@ export function CustomerRecordDetail({
               <button type="button" onClick={startAccountQuote} disabled={quoteStartBusy} style={heroBtn}>
                 <PlusIcon /> {quoteStartBusy ? 'Starting…' : 'Quote'}
               </button>
-              <button
-                type="button"
-                style={heroBtn}
-                disabled={outreachBusy}
-                title={outreachMsg ?? 'Add this account to Outreach'}
-                onClick={() => {
-                  if (outreachBusy) return;
-                  setOutreachBusy(true);
-                  setOutreachMsg(null);
-                  void addOutreachAccounts([c.id])
-                    .then(() => {
-                      setOutreachMsg('Added to outreach');
-                      window.setTimeout(() => setOutreachMsg(null), 2200);
-                    })
-                    .catch((err) => {
-                      setOutreachMsg(err instanceof Error ? err.message : 'Could not add');
-                      window.setTimeout(() => setOutreachMsg(null), 3200);
-                    })
-                    .finally(() => setOutreachBusy(false));
+              <span ref={outreachAnchorRef} style={{ display: 'inline-flex' }}>
+                <button
+                  type="button"
+                  style={heroBtn}
+                  disabled={outreachBusy}
+                  title={outreachMsg ?? 'Add this account to Outreach'}
+                  onClick={() => {
+                    if (outreachBusy) return;
+                    setOutreachPopoverOpen((open) => !open);
+                  }}
+                >
+                  <AppIcon name="broadcast" size={12} />{' '}
+                  {outreachMsg ?? (outreachBusy ? 'Adding…' : 'Outreach')}
+                </button>
+              </span>
+              <AddToOutreachTagPopover
+                customerId={c.id}
+                companyName={c.company}
+                anchorRef={outreachAnchorRef}
+                open={outreachPopoverOpen}
+                onClose={() => setOutreachPopoverOpen(false)}
+                onBusyChange={setOutreachBusy}
+                onDone={(message, ok) => {
+                  setOutreachMsg(message);
+                  window.setTimeout(() => setOutreachMsg(null), ok ? 2200 : 3200);
                 }}
-              >
-                <AppIcon name="broadcast" size={12} />{' '}
-                {outreachMsg ?? (outreachBusy ? 'Adding…' : 'Outreach')}
-              </button>
+              />
               <button
                 type="button"
                 onClick={openAddRecords}
@@ -1231,6 +1238,7 @@ export function CustomerRecordDetail({
             contracts={contracts}
             refreshToken={remindersRefresh}
             onAdd={onAddReminder}
+            onEdit={onEditReminder}
             scrollSection={ScrollSection}
             emptyRow={EmptyRow}
           />

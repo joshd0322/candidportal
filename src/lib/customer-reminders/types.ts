@@ -56,6 +56,20 @@ export type CreateCustomerReminderInput = {
   contactEmail?: string;
 };
 
+export type UpdateCustomerReminderInput = {
+  kind?: CustomerReminderKind;
+  title?: string;
+  body?: string | null;
+  dueAt?: string | null;
+  calendarStartAt?: string | null;
+  calendarEndAt?: string | null;
+  notifyPortal?: boolean;
+  notifyEmail?: boolean;
+  contactEmail?: string | null;
+  dealExternalId?: string | null;
+  status?: CustomerReminderStatus;
+};
+
 export const REMINDER_KIND_LABELS: Record<CustomerReminderKind, string> = {
   task: 'Task',
   reminder: 'Reminder',

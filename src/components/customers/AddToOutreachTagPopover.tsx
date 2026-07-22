@@ -12,7 +12,12 @@ import { createPortal } from 'react-dom';
 import { OutreachTagInput } from '@/components/admin/OutreachTagInput';
 import {
   addOutreachAccounts,
+  listOutreachAccounts,
   listOutreachTagCatalog,
+  OUTREACH_ASSIGN_LABELS,
+  OUTREACH_ASSIGN_PRESETS,
+  type OutreachAssignPreset,
+  type OutreachOwnerOption,
   type OutreachTagCatalogItem,
 } from '@/lib/outreach';
 
@@ -26,7 +31,7 @@ type Props = {
   onBusyChange?: (busy: boolean) => void;
 };
 
-const POPOVER_W = 300;
+const POPOVER_W = 320;
 
 export function AddToOutreachTagPopover({
   customerId,
@@ -41,6 +46,9 @@ export function AddToOutreachTagPopover({
   const [pos, setPos] = useState({ top: 0, left: 0 });
   const [tagNames, setTagNames] = useState<string[]>([]);
   const [catalog, setCatalog] = useState<OutreachTagCatalogItem[]>([]);
+  const [owners, setOwners] = useState<OutreachOwnerOption[]>([]);
+  const [assignPreset, setAssignPreset] = useState<OutreachAssignPreset>('me');
+  const [otherUserId, setOtherUserId] = useState('');
   const [busy, setBusy] = useState(false);
 
   const reposition = useCallback(() => {
@@ -48,7 +56,11 @@ export function AddToOutreachTagPopover({
     if (!el) return;
     const rect = el.getBoundingClientRect();
     const left = Math.max(8, Math.min(rect.right - POPOVER_W, window.innerWidth - POPOVER_W - 8));
-    const top = rect.bottom + 6;
+    let top = rect.bottom + 6;
+    const estimatedHeight = 340;
+    if (top + estimatedHeight > window.innerHeight - 8) {
+      top = Math.max(8, rect.top - estimatedHeight - 4);
+    }
     setPos({ top, left });
   }, [anchorRef]);
 
@@ -66,9 +78,14 @@ export function AddToOutreachTagPopover({
   useEffect(() => {
     if (!open) return;
     setTagNames([]);
+    setAssignPreset('me');
+    setOtherUserId('');
     void listOutreachTagCatalog()
       .then(setCatalog)
       .catch(() => setCatalog([]));
+    void listOutreachAccounts('me')
+      .then((data) => setOwners(data.owners))
+      .catch(() => setOwners([]));
   }, [open]);
 
   useEffect(() => {
@@ -92,14 +109,28 @@ export function AddToOutreachTagPopover({
 
   const submit = async () => {
     if (busy) return;
+    if (assignPreset === 'other' && !otherUserId) {
+      onDone('Pick who to assign', false);
+      return;
+    }
     setBusy(true);
     onBusyChange?.(true);
     try {
       await addOutreachAccounts([customerId], {
         tagNames: tagNames.length ? tagNames : undefined,
+        assignPreset,
+        otherUserId: assignPreset === 'other' ? otherUserId : undefined,
       });
+      const assignLabel =
+        assignPreset === 'other'
+          ? owners.find((o) => o.id === otherUserId)?.displayName || 'assigned'
+          : OUTREACH_ASSIGN_LABELS[assignPreset];
+      const parts = [
+        tagNames.length ? `tags: ${tagNames.join(', ')}` : null,
+        assignPreset !== 'me' ? `assigned: ${assignLabel}` : null,
+      ].filter(Boolean);
       onDone(
-        tagNames.length ? `Added to outreach (${tagNames.join(', ')})` : 'Added to outreach',
+        parts.length ? `Added to outreach (${parts.join(' · ')})` : 'Added to outreach',
         true,
       );
       onClose();
@@ -136,11 +167,52 @@ export function AddToOutreachTagPopover({
         disabled={busy}
         placeholder="Select or create a tag"
       />
+      <label className="crm-outreach-add-popover-field">
+        <span>Assign to</span>
+        <select
+          className="outreach-select"
+          value={assignPreset}
+          disabled={busy}
+          onChange={(e) => setAssignPreset(e.target.value as OutreachAssignPreset)}
+        >
+          {OUTREACH_ASSIGN_PRESETS.map((p) => (
+            <option key={p} value={p}>
+              {OUTREACH_ASSIGN_LABELS[p]}
+            </option>
+          ))}
+        </select>
+      </label>
+      {assignPreset === 'other' ? (
+        <label className="crm-outreach-add-popover-field">
+          <span>Team member</span>
+          <select
+            className="outreach-select"
+            value={otherUserId}
+            disabled={busy}
+            onChange={(e) => setOtherUserId(e.target.value)}
+          >
+            <option value="">Pick user…</option>
+            {owners.map((o) => (
+              <option key={o.id} value={o.id}>
+                {o.displayName}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
+      <p className="crm-outreach-add-popover-hint">
+        Assignment sets the Outreach Owner on the new row. The account still stays on your list.
+      </p>
       <div className="crm-outreach-add-popover-actions">
         <button type="button" className="admin-ticket-btn" disabled={busy} onClick={onClose}>
           Cancel
         </button>
-        <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void submit()}>
+        <button
+          type="button"
+          className="btn btn-primary"
+          disabled={busy || (assignPreset === 'other' && !otherUserId)}
+          onClick={() => void submit()}
+        >
           {busy ? 'Adding…' : 'Add'}
         </button>
       </div>

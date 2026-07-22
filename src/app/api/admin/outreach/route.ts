@@ -129,6 +129,10 @@ export async function POST(request: Request) {
     customerExternalIds?: unknown;
     customerExternalId?: unknown;
     tagNames?: unknown;
+    assignPreset?: unknown;
+    otherUserId?: unknown;
+    assignedUserIds?: unknown;
+    followUpOwnerUserId?: unknown;
   };
   const ids = new Set<string>();
   if (typeof body.customerExternalId === 'string' && body.customerExternalId.trim()) {
@@ -143,6 +147,48 @@ export async function POST(request: Request) {
   const tagNames = normalizeOutreachTagNames(body.tagNames);
 
   const admin = createSupabaseAdminClient();
+
+  let assigneeIds: string[] = [userId];
+  let followUpOwnerId: string = userId;
+  if (typeof body.assignPreset === 'string') {
+    const resolved = await resolveOutreachAssignUserIds(
+      admin,
+      userId,
+      body.assignPreset as OutreachAssignPreset,
+      typeof body.otherUserId === 'string' ? body.otherUserId : undefined,
+    );
+    if (resolved.error || !resolved.ids.length) {
+      return NextResponse.json({ error: resolved.error ?? 'Could not resolve assignees' }, { status: 400 });
+    }
+    assigneeIds = resolved.ids;
+    followUpOwnerId = resolved.ids[0]!;
+  } else if (Array.isArray(body.assignedUserIds)) {
+    const requested = body.assignedUserIds.filter((v): v is string => typeof v === 'string');
+    const allowed = await filterAuthorizedAdminIds(admin, requested);
+    if (requested.length && !allowed.length) {
+      return NextResponse.json({ error: 'Assignees must be authorized admins' }, { status: 400 });
+    }
+    if (allowed.length) {
+      assigneeIds = allowed;
+      followUpOwnerId = allowed[0]!;
+    }
+  }
+  if (
+    body.followUpOwnerUserId !== undefined &&
+    body.followUpOwnerUserId !== null &&
+    body.followUpOwnerUserId !== ''
+  ) {
+    const ownerId = String(body.followUpOwnerUserId);
+    const allowed = await filterAuthorizedAdminIds(admin, [ownerId]);
+    if (!allowed.length) {
+      return NextResponse.json({ error: 'Outreach owner must be an authorized admin' }, { status: 400 });
+    }
+    followUpOwnerId = allowed[0]!;
+    if (!assigneeIds.includes(followUpOwnerId)) {
+      assigneeIds = [followUpOwnerId, ...assigneeIds];
+    }
+  }
+
   const { data: existing } = await admin
     .from('admin_outreach_accounts')
     .select('customer_external_id')
@@ -170,8 +216,8 @@ export async function POST(request: Request) {
       status: 'not_started' as OutreachStatus,
       how_can_we_help: 'no_current_need' as OutreachHelpOption,
       contact_id: primary?.id ?? null,
-      follow_up_owner_user_id: userId,
-      assigned_user_ids: [userId],
+      follow_up_owner_user_id: followUpOwnerId,
+      assigned_user_ids: assigneeIds,
       sort_order: sortBase++,
     };
   });

@@ -314,7 +314,13 @@ export async function listOutreachTagCatalog(): Promise<OutreachTagCatalogItem[]
 
 export async function addOutreachAccounts(
   customerExternalIds: string[],
-  options?: { tagNames?: string[] },
+  options?: {
+    tagNames?: string[];
+    assignPreset?: OutreachAssignPreset;
+    otherUserId?: string;
+    assignedUserIds?: string[];
+    followUpOwnerUserId?: string | null;
+  },
 ): Promise<OutreachAccount[]> {
   const res = await fetch('/api/admin/outreach', {
     method: 'POST',
@@ -322,6 +328,10 @@ export async function addOutreachAccounts(
     body: JSON.stringify({
       customerExternalIds,
       tagNames: options?.tagNames,
+      assignPreset: options?.assignPreset,
+      otherUserId: options?.otherUserId,
+      assignedUserIds: options?.assignedUserIds,
+      followUpOwnerUserId: options?.followUpOwnerUserId,
     }),
   });
   if (!res.ok) {
